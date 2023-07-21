@@ -4,15 +4,24 @@ ini_set("display_errors", 1);
 header_remove("X-Powered-By");
 corsHeaders();
 main();
+// main("https://www.google.com"); 
 
-function main()
+function main($origin = '')
 {
+
     // skip OPTIONS request
     if ($_SERVER["REQUEST_METHOD"] === "OPTIONS") {
         exit();
     }
 
     $path = urlPathPart();
+
+    if ($origin !== '') {
+        // proxy for single origin
+        if (!isUrl($origin)) exit('$origin should be url origin like "https://example.net" !');
+        reverseProxy((endsWith($origin, "/") ? $origin : $origin . "/") . $path, [], false);
+        return;
+    }
 
     if (strlen($path) === 0) {
         function getServerVar($key)
@@ -35,7 +44,7 @@ function main()
     }
 
     $referer = isUrl($path) ? $path : "http://$path";
-    reverseProxy($path, ["Referer: $referer"]);
+    reverseProxy($path, ["Referer: $referer"], true);
 }
 
 /**
@@ -108,7 +117,7 @@ function urlPathPart()
 /**
  * reverse proxy for an url
  */
-function reverseProxy($targetUrl, $incomingHeaders = [])
+function reverseProxy($targetUrl, $incomingHeaders = [], $followLocation = false)
 {
     // Get incoming request headers
     foreach (getallheaders() as $key => $val) {
@@ -141,7 +150,7 @@ function reverseProxy($targetUrl, $incomingHeaders = [])
     curl_setopt($ch, CURLOPT_FAILONERROR, false);
 
     // Forward headers
-    curl_setopt($ch, CURLOPT_HEADERFUNCTION, function ($curl, $header_line) use ($targetUrl) {
+    curl_setopt($ch, CURLOPT_HEADERFUNCTION, function ($curl, $header_line) use ($targetUrl, $followLocation) {
         // split header to key and value
         $kv = explode(":", $header_line);
         $k = strtolower(trim($kv[0])); // header key
@@ -150,7 +159,7 @@ function reverseProxy($targetUrl, $incomingHeaders = [])
             return strlen($header_line);
         } // skip http version header
 
-        if ($k !== "location") {
+        if ($followLocation || $k !== "location") {
             http_response_code(curl_getinfo($curl, CURLINFO_HTTP_CODE)); // forward status code
             header($header_line); // forward single header here
             return strlen($header_line); // curl need this return
