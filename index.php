@@ -2,13 +2,16 @@
 error_reporting(E_ALL);
 ini_set("display_errors", 1);
 header_remove("X-Powered-By");
-corsHeaders();
 main();
 // main("https://www.google.com"); 
 
+
+/**
+ * @param $origin  -  provide none string value or blank string to show a proxy api
+ * or an url that proxy to (place index.php in root dir and rewrite engine must be configured correctly)
+ */
 function main($origin = '')
 {
-
     // skip OPTIONS request
     if ($_SERVER["REQUEST_METHOD"] === "OPTIONS") {
         exit();
@@ -16,14 +19,21 @@ function main($origin = '')
 
     $path = urlPathPart();
 
-    if ($origin !== '') {
-        // proxy for single origin
+    // proxy for one site
+    if (is_string($origin) && $origin !== '') {
         if (!isUrl($origin)) exit('$origin should be url origin like "https://example.net" !');
-        reverseProxy((endsWith($origin, "/") ? $origin : $origin . "/") . $path, [], false);
+        reverseProxy((endsWith($origin, "/") ? $origin : $origin . "/") . $path, [], false, false);
         return;
     }
 
-    if (strlen($path) === 0) {
+    // proxy api
+    corsHeaders(); // enable cors
+    if ($path !== "") {
+        $referer = isUrl($path) ? $path : "http://$path";
+        reverseProxy($path, ["Referer: $referer"], true, true);
+        exit();
+    } else {
+        // show api doc
         function getServerVar($key)
         { // avoid php warning
             return array_key_exists($key, $_SERVER) ? $_SERVER[$key] : "";
@@ -42,9 +52,6 @@ function main($origin = '')
         HEREB;
         exit();
     }
-
-    $referer = isUrl($path) ? $path : "http://$path";
-    reverseProxy($path, ["Referer: $referer"], true);
 }
 
 /**
@@ -116,8 +123,13 @@ function urlPathPart()
 
 /**
  * reverse proxy for an url
+ * 
+ * @param targetUrl  -  the url that proxy to
+ * @param incomingHeaders  -  string array, header list that will be used when request
+ * @param rewriteLocation  -  rewrite `location` header to keep url proxied, rather than redirect to another url
+ * @param removeCSP  -  remove CSP headers
  */
-function reverseProxy($targetUrl, $incomingHeaders = [], $followLocation = false)
+function reverseProxy($targetUrl, $incomingHeaders = [], $rewriteLocation = false, $removeCSP = false)
 {
     // Get incoming request headers
     foreach (getallheaders() as $key => $val) {
@@ -150,34 +162,42 @@ function reverseProxy($targetUrl, $incomingHeaders = [], $followLocation = false
     curl_setopt($ch, CURLOPT_FAILONERROR, false);
 
     // Forward headers
-    curl_setopt($ch, CURLOPT_HEADERFUNCTION, function ($curl, $header_line) use ($targetUrl, $followLocation) {
+    curl_setopt($ch, CURLOPT_HEADERFUNCTION, function ($curl, $header_line) use ($targetUrl, $rewriteLocation, $removeCSP) {
         // split header to key and value
         $kv = explode(":", $header_line);
         $k = strtolower(trim($kv[0])); // header key
         $v = trim(implode(":", array_slice($kv, 1))); // header value
-        if (startsWith($k, "http/") || $k === "transfer-encoding") {
-            return strlen($header_line);
-        } // skip http version header
+        if (startsWith($k, "http/") || $k === "transfer-encoding") return strlen($header_line); // skip http version header
 
-        if ($followLocation || $k !== "location") {
-            http_response_code(curl_getinfo($curl, CURLINFO_HTTP_CODE)); // forward status code
-            header($header_line); // forward single header here
-            return strlen($header_line); // curl need this return
-        }
-
-        $location = $v;
-        $parsedUrl = parse_url(isUrl($targetUrl) ? $targetUrl : "http://" . $targetUrl);
-        $origin = $parsedUrl["scheme"] . "://" . $parsedUrl["host"] . (array_key_exists("port", $parsedUrl) ? (":" . $parsedUrl["port"]) : "");
-        $redirect = removeSuffix($_SERVER["REQUEST_URI"], $targetUrl);
-        if (isUrl($location)) {
-            $redirect = $redirect . $location; // absolute url
-        } elseif (startsWith($location, "/")) {
-            $redirect = $redirect . $origin . $location; // relative to url's root
+        //?[option] $rewriteLocation 
+        if ($rewriteLocation && $k === "location") {
+            // handle "Location: xxx"
+            $location = $v;
+            $parsedUrl = parse_url(isUrl($targetUrl) ? $targetUrl : "http://" . $targetUrl);
+            $origin = $parsedUrl["scheme"] . "://" . $parsedUrl["host"] . (array_key_exists("port", $parsedUrl) ? (":" . $parsedUrl["port"]) : "");
+            $redirect = removeSuffix($_SERVER["REQUEST_URI"], $targetUrl);
+            if (isUrl($location)) {
+                $redirect = $redirect . $location; // absolute url
+            } elseif (startsWith($location, "/")) {
+                $redirect = $redirect . $origin . $location; // relative to url's root
+            } else {
+                $redirect = $redirect . $origin . (array_key_exists("path", $parsedUrl) ? $parsedUrl["path"] : "") . "/" . $location; // relative to current url
+            }
+            header("location: $redirect"); // forward location header here
         } else {
-            $redirect = $redirect . $origin . (array_key_exists("path", $parsedUrl) ? $parsedUrl["path"] : "") . "/" . $location; // relative to current url
+            // handle "$k: $v"
+            $header = $header_line;
+            //?[option] $removeCSP
+            if ($removeCSP && ($k === "content-security-policy" ||
+                $k === "content-security-policy-report-only" ||
+                $k === "cross-origin-resource-policy" ||
+                $k === "cross-origin-embedder-policy"
+            ))  $header = "";
+
+            if ($header !== "") header($header); // forward single header here
         }
-        header("location: $redirect"); // forward location header
-        http_response_code(curl_getinfo($curl, CURLINFO_HTTP_CODE));
+
+        http_response_code(curl_getinfo($curl, CURLINFO_HTTP_CODE)); // forward status code
         return strlen($header_line); // curl need this return
     });
 
@@ -197,7 +217,9 @@ function reverseProxy($targetUrl, $incomingHeaders = [], $followLocation = false
         header("content-type: application/json");
         $errno = curl_errno($ch);
         $error = curl_error($ch);
-        echo json_encode(["errno" => $errno, "error" => $error]);
+        $json =  json_encode(["errno" => $errno, "error" => $error]);
+        header("x-proxy-error: $json"); // experimental
+        echo $json;
     }
 }
 

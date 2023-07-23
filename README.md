@@ -15,11 +15,16 @@ fetch("http://localhost:8080/https://example.net");
 fetch("http://localhost:8080/example.net");
 ```
 
-## develop
+# develop
 
 ```sh
 php -S 0.0.0.0:8080 index.php
 ```
+
+# deploy
+
+edit `index.php` and upload `index.php` and `.htaccess` (for apache) to root directory to host a reverse proxy for one site  
+or put `index.php` to any directory to host a proxy api (should edit `.htaccess`)
 
 ## nginx config example
 
@@ -46,3 +51,7 @@ location / {
     RewriteRule ^/(\w+)/(.*)$ /$1/index.php/$2 [L,E=PATH_INFO:$2]
 </IfModule>
 ```
+
+## known issue
+
+forward HEAD request will throw `{"errno":18,"error":"transfer closed with 258 bytes remaining to read"}`
