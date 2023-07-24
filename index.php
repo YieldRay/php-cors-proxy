@@ -1,7 +1,6 @@
 <?php
 error_reporting(E_ALL);
 ini_set("display_errors", 1);
-header_remove("X-Powered-By");
 main();
 // main("https://www.google.com"); 
 
@@ -22,15 +21,14 @@ function main($origin = '')
     // proxy for one site
     if (is_string($origin) && $origin !== '') {
         if (!isUrl($origin)) exit('$origin should be url origin like "https://example.net" !');
-        reverseProxy((endsWith($origin, "/") ? $origin : $origin . "/") . $path, [], false, false);
+        reverseProxy((endsWith($origin, "/") ? $origin : $origin . "/") . $path, [], false);
         return;
     }
 
     // proxy api
-    corsHeaders(); // enable cors
     if ($path !== "") {
         $referer = isUrl($path) ? $path : "http://$path";
-        reverseProxy($path, ["Referer: $referer"], true, true);
+        reverseProxy($path, ["Referer: $referer"], true);
         exit();
     } else {
         // show api doc
@@ -125,17 +123,16 @@ function urlPathPart()
  * reverse proxy for an url
  * 
  * @param targetUrl  -  the url that proxy to
- * @param incomingHeaders  -  string array, header list that will be used when request
+ * @param requestHeaders  -  string array, header list that will be used when request
  * @param rewriteLocation  -  rewrite `location` header to keep url proxied, rather than redirect to another url
- * @param removeCSP  -  remove CSP headers
  */
-function reverseProxy($targetUrl, $incomingHeaders = [], $rewriteLocation = false, $removeCSP = false)
+function reverseProxy($targetUrl, $requestHeaders = [], $rewriteLocation = false)
 {
     // Get incoming request headers
     foreach (getallheaders() as $key => $val) {
         // Exclude some header
         if (strtolower($key) !== "host" && strtolower($key) !== "accept-encoding") {
-            $incomingHeaders[] = "$key: $val";
+            $requestHeaders[] = "$key: $val";
         }
     }
 
@@ -149,7 +146,7 @@ function reverseProxy($targetUrl, $incomingHeaders = [], $rewriteLocation = fals
     curl_setopt($ch, CURLOPT_AUTOREFERER, true);
 
     // Pass incoming request headers to the target server
-    curl_setopt($ch, CURLOPT_HTTPHEADER, $incomingHeaders);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, $requestHeaders);
 
     // Forward the request method and body
     curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $_SERVER["REQUEST_METHOD"]);
@@ -162,7 +159,7 @@ function reverseProxy($targetUrl, $incomingHeaders = [], $rewriteLocation = fals
     curl_setopt($ch, CURLOPT_FAILONERROR, false);
 
     // Forward headers
-    curl_setopt($ch, CURLOPT_HEADERFUNCTION, function ($curl, $header_line) use ($targetUrl, $rewriteLocation, $removeCSP) {
+    curl_setopt($ch, CURLOPT_HEADERFUNCTION, function ($curl, $header_line) use ($targetUrl, $rewriteLocation) {
         // split header to key and value
         $kv = explode(":", $header_line);
         $k = strtolower(trim($kv[0])); // header key
@@ -186,15 +183,24 @@ function reverseProxy($targetUrl, $incomingHeaders = [], $rewriteLocation = fals
             header("location: $redirect"); // forward location header here
         } else {
             // handle "$k: $v"
-            $header = $header_line;
-            //?[option] $removeCSP
-            if ($removeCSP && ($k === "content-security-policy" ||
+            if (
+                // remove csp header
+                $k === "content-security-policy" ||
                 $k === "content-security-policy-report-only" ||
                 $k === "cross-origin-resource-policy" ||
-                $k === "cross-origin-embedder-policy"
-            ))  $header = "";
-
-            if ($header !== "") header($header); // forward single header here
+                $k === "cross-origin-embedder-policy" ||
+                // remove cors header
+                $k === "access-control-allow-origin" ||
+                $k === "access-control-allow-method" ||
+                $k === "access-control-allow-headers" ||
+                $k === "access-control-allow-credentials" ||
+                $k === "access-control-max-age" ||
+                $k === "timing-allow-origin"
+            ) {
+                // do nothing
+            } else {
+                header($header_line); // forward single header here
+            }
         }
 
         http_response_code(curl_getinfo($curl, CURLINFO_HTTP_CODE)); // forward status code
@@ -207,8 +213,9 @@ function reverseProxy($targetUrl, $incomingHeaders = [], $rewriteLocation = fals
     curl_setopt($ch, CURLOPT_SSL_VERIFYSTATUS, false);
     curl_setopt($ch, CURLOPT_PROXY_SSL_VERIFYPEER, false);
 
-    // Execute the cURL request
+    // Execute the cURL request & send response
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
+    corsHeaders();
     $success = curl_exec($ch);
 
     // Error handler
@@ -218,9 +225,10 @@ function reverseProxy($targetUrl, $incomingHeaders = [], $rewriteLocation = fals
         $errno = curl_errno($ch);
         $error = curl_error($ch);
         $json =  json_encode(["errno" => $errno, "error" => $error]);
-        header("x-proxy-error: $json"); // experimental
-        echo $json;
+        if ($_SERVER["REQUEST_METHOD"] === "HEAD") header("x-proxy-error: $json"); // experimental
+        else echo $json;
     }
+    exit();
 }
 
 /**
@@ -228,6 +236,7 @@ function reverseProxy($targetUrl, $incomingHeaders = [], $rewriteLocation = fals
  */
 function corsHeaders()
 {
+    header_remove("X-Powered-By");
     header("access-control-allow-origin: *");
     header("access-control-allow-method: *");
     header("access-control-allow-headers: *");
