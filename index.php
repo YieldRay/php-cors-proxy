@@ -13,6 +13,7 @@ function main($origin = '')
 {
     // skip OPTIONS request
     if ($_SERVER["REQUEST_METHOD"] === "OPTIONS") {
+        corsHeaders();
         exit();
     }
 
@@ -22,7 +23,7 @@ function main($origin = '')
     if (is_string($origin) && $origin !== '') {
         if (!isUrl($origin)) exit('$origin should be url origin like "https://example.net" !');
         reverseProxy((endsWith($origin, "/") ? $origin : $origin . "/") . $path, [], false);
-        return;
+        exit();
     }
 
     // proxy api
@@ -189,6 +190,7 @@ function reverseProxy($targetUrl, $requestHeaders = [], $rewriteLocation = false
                 $k === "content-security-policy-report-only" ||
                 $k === "cross-origin-resource-policy" ||
                 $k === "cross-origin-embedder-policy" ||
+                $k === "permissions-policy" ||
                 // remove cors header
                 $k === "access-control-allow-origin" ||
                 $k === "access-control-allow-method" ||
