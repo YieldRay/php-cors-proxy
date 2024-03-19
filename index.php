@@ -238,8 +238,9 @@ function reverseProxy($targetUrl, $requestHeaders = [], $rewriteLocation = false
  */
 function corsHeaders()
 {
+    $origin = isset($_SERVER['HTTP_ORIGIN']) ? $_SERVER['HTTP_ORIGIN'] : '*';
     header_remove("X-Powered-By");
-    header("access-control-allow-origin: *");
+    header("access-control-allow-origin: $origin");
     header("access-control-allow-method: *");
     header("access-control-allow-headers: *");
     header("access-control-allow-credentials: true");
