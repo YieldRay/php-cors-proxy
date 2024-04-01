@@ -21,7 +21,8 @@ function main($origin = '')
 
     // proxy for one site
     if (is_string($origin) && $origin !== '') {
-        if (!isUrl($origin)) exit('$origin should be url origin like "https://example.net" !');
+        if (!isUrl($origin))
+            exit('$origin should be url origin like "https://example.net" !');
         reverseProxy((endsWith($origin, "/") ? $origin : $origin . "/") . $path, [], false);
         exit();
     }
@@ -129,43 +130,66 @@ function urlPathPart()
  */
 function reverseProxy($targetUrl, $requestHeaders = [], $rewriteLocation = false)
 {
+    $isMultipartFormData = isset($_SERVER['CONTENT_TYPE']) && startsWith($_SERVER['CONTENT_TYPE'], 'multipart/form-data');
+
     // Get incoming request headers
     foreach (getallheaders() as $key => $val) {
         // Exclude some header
-        if (strtolower($key) !== "host" && strtolower($key) !== "accept-encoding") {
-            $requestHeaders[] = "$key: $val";
+        $name = strtolower($key);
+        if ($name !== "host" && $name !== "accept-encoding") {
+            if ($name === "content-type" && $isMultipartFormData) {
+                $requestHeaders[] = "content-type: multipart/form-data";
+            } else {
+                $requestHeaders[] = "$name: $val";
+            }
         }
     }
+
 
     // Initialize cURL session
     $ch = curl_init();
 
     // Set the target URL
     curl_setopt($ch, CURLOPT_URL, $targetUrl);
+    curl_setopt($ch, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
 
-    // Enable automatically set the Referer: field
+    // Enable automatically set the Referer field
     curl_setopt($ch, CURLOPT_AUTOREFERER, true);
 
-    // Pass incoming request headers to the target server
+    // Forward request headers
     curl_setopt($ch, CURLOPT_HTTPHEADER, $requestHeaders);
 
-    // Forward the request method and body
+    // Forward request method and body
     curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $_SERVER["REQUEST_METHOD"]);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, file_get_contents("php://input"));
+    if ($isMultipartFormData) {
+        $fields = array();
+        foreach ($_POST as $key => $value) {
+            $fields[$key] = $value;
+        }
+        foreach ($_FILES as $key => $file) {
+            if ($file['error'] === UPLOAD_ERR_OK) {
+                $fields[$key] = new CURLFile($file['tmp_name'], $file['type'], $file['name']);
+            }
+        }
+        curl_setopt(
+            $ch,
+            CURLOPT_POSTFIELDS,
+            $fields
+        );
+    } else {
+        curl_setopt($ch, CURLOPT_POSTFIELDS, file_get_contents("php://input"));
+        // curl_setopt($ch, CURLOPT_UPLOAD, true);
+        // curl_setopt($ch, CURLOPT_INFILE, fopen('php://input', 'r'));
+    }
 
-    // Do not follow location
-    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, false);
-
-    // Do not fail on error
-    curl_setopt($ch, CURLOPT_FAILONERROR, false);
-
-    // Forward headers
+    // Forward response headers
     curl_setopt($ch, CURLOPT_HEADERFUNCTION, function ($curl, $header_line) use ($targetUrl, $rewriteLocation) {
         // split header to key and value
         $kv = explode(":", $header_line);
         $k = strtolower(trim($kv[0])); // header key
         $v = trim(implode(":", array_slice($kv, 1))); // header value
-        if (startsWith($k, "http/") || $k === "transfer-encoding") return strlen($header_line); // skip http version header
+        if (startsWith($k, "http/") || $k === "transfer-encoding")
+            return strlen($header_line); // skip http version header
 
         //?[option] $rewriteLocation 
         if ($rewriteLocation && $k === "location") {
@@ -209,6 +233,12 @@ function reverseProxy($targetUrl, $requestHeaders = [], $rewriteLocation = false
         return strlen($header_line); // curl need this return
     });
 
+    // Do not follow location
+    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, false);
+
+    // Do not fail on error
+    curl_setopt($ch, CURLOPT_FAILONERROR, false);
+
     // Skip ssl check
     curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
@@ -226,9 +256,11 @@ function reverseProxy($targetUrl, $requestHeaders = [], $rewriteLocation = false
         header("content-type: application/json");
         $errno = curl_errno($ch);
         $error = curl_error($ch);
-        $json =  json_encode(["errno" => $errno, "error" => $error]);
-        if ($_SERVER["REQUEST_METHOD"] === "HEAD") header("x-proxy-error: $json"); // experimental
-        else echo $json;
+        $json = json_encode(["errno" => $errno, "error" => $error]);
+        if ($_SERVER["REQUEST_METHOD"] === "HEAD")
+            header("x-proxy-error: $json"); // experimental
+        else
+            echo $json;
     }
     exit();
 }

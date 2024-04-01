@@ -1,6 +1,6 @@
 # php-cors-proxy
 
-cors proxy written in php, using built-in curl
+CORS proxy written in php, using built-in curl.
 
 ```js
 /**
@@ -15,20 +15,20 @@ fetch("http://localhost:8080/https://example.net");
 fetch("http://localhost:8080/example.net");
 ```
 
-# develop
+# Develop
 
 ```sh
 php -S 0.0.0.0:8080 index.php
 ```
 
-# deploy
+# Deploy
 
-edit `index.php` and upload `index.php` and `.htaccess` (for apache) to root directory to host a reverse proxy for one site  
+Edit `index.php` and upload `index.php` and `.htaccess` (for apache) to root directory to host a reverse proxy for one site  
 or put `index.php` to any directory to host a proxy api (should edit `.htaccess`)
 
-## nginx config example
+## Nginx config example
 
-> ignore this if you use apache
+> Ignore this if you use apache.
 
 ```nginx
 location / {
@@ -38,9 +38,9 @@ location / {
 }
 ```
 
-## apache config example
+## Apache config example
 
-> ignore this if you use `.htaccess` in this repo
+> Ignore this if you use `.htaccess` in this repo.
 
 ```htaccess
 <IfModule mod_rewrite.c>
@@ -52,6 +52,6 @@ location / {
 </IfModule>
 ```
 
-## known issue
+## Known issue
 
-forward HEAD request will throw `{"errno":18,"error":"transfer closed with 258 bytes remaining to read"}`
+Forward HEAD request will throw `{"errno":18,"error":"transfer closed with 258 bytes remaining to read"}`.
