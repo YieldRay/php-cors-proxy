@@ -29,7 +29,7 @@ function main($origin = '')
 
     // proxy api
     if ($path !== "") {
-        $referer = isUrl($path) ? $path : "http://$path";
+        $referer = isUrl($path) ? $path : "https://$path";
         reverseProxy($path, ["Referer: $referer"], true);
         exit();
     } else {
@@ -121,6 +121,21 @@ function urlPathPart()
     return $PATH;
 }
 
+
+// https://www.php.net/manual/function.getallheaders.php#84262
+if (!function_exists('getallheaders')) {
+    function getallheaders()
+    {
+        $headers = [];
+        foreach ($_SERVER as $name => $value) {
+            if (substr($name, 0, 5) == 'HTTP_') {
+                $headers[str_replace(' ', '-', ucwords(strtolower(str_replace('_', ' ', substr($name, 5)))))] = $value;
+            }
+        }
+        return $headers;
+    }
+}
+
 /**
  * reverse proxy for an url
  * 
@@ -133,16 +148,28 @@ function reverseProxy($targetUrl, $requestHeaders = [], $rewriteLocation = false
     $isMultipartFormData = isset($_SERVER['CONTENT_TYPE']) && startsWith($_SERVER['CONTENT_TYPE'], 'multipart/form-data');
 
     // Get incoming request headers
-    foreach (getallheaders() as $key => $val) {
-        // Exclude some header
-        $name = strtolower($key);
-        if ($name !== "host" && $name !== "accept-encoding") {
-            if ($name === "content-type" && $isMultipartFormData) {
-                $requestHeaders[] = "content-type: multipart/form-data";
-            } else {
-                $requestHeaders[] = "$name: $val";
-            }
+    $requestHeadersMap = array_change_key_case(getallheaders(), CASE_LOWER);
+    $responseHeadersMap = [];
+    unset($requestHeadersMap["host"]);
+    unset($requestHeadersMap["connection"]);
+    unset($requestHeadersMap["accept-encoding"]);
+    $X_MOD_REQ = "x-modreq-";
+    $X_MOD_RES = "x-modres-";
+    foreach ($requestHeadersMap as $key => $val) {
+        if (startsWith($key, $X_MOD_REQ)) {
+            $requestHeadersMap[substr($key, strlen($X_MOD_REQ))] = $val;
+            unset($requestHeadersMap[$key]);
+        } elseif (startsWith($key, $X_MOD_RES)) {
+            $responseHeadersMap[substr($key, strlen($X_MOD_RES))] = $val;
+            unset($requestHeadersMap[$key]);
         }
+    }
+    if ($isMultipartFormData) {
+        unset($requestHeadersMap["content-type"]);
+        unset($requestHeadersMap["content-length"]);
+    }
+    foreach ($requestHeadersMap as $name => $val) {
+        $requestHeaders[] = "$name: $val";
     }
 
 
@@ -162,7 +189,7 @@ function reverseProxy($targetUrl, $requestHeaders = [], $rewriteLocation = false
     // Forward request method and body
     curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $_SERVER["REQUEST_METHOD"]);
     if ($isMultipartFormData) {
-        $fields = array();
+        $fields = [];
         foreach ($_POST as $key => $value) {
             $fields[$key] = $value;
         }
@@ -183,12 +210,12 @@ function reverseProxy($targetUrl, $requestHeaders = [], $rewriteLocation = false
     }
 
     // Forward response headers
-    curl_setopt($ch, CURLOPT_HEADERFUNCTION, function ($curl, $header_line) use ($targetUrl, $rewriteLocation) {
+    curl_setopt($ch, CURLOPT_HEADERFUNCTION, function ($curl, $header_line) use ($targetUrl, $rewriteLocation, $responseHeadersMap) {
         // split header to key and value
         $kv = explode(":", $header_line);
         $k = strtolower(trim($kv[0])); // header key
         $v = trim(implode(":", array_slice($kv, 1))); // header value
-        if (startsWith($k, "http/") || $k === "transfer-encoding")
+        if (startsWith($k, "http/"))
             return strlen($header_line); // skip http version header
 
         //?[option] $rewriteLocation 
@@ -221,7 +248,12 @@ function reverseProxy($targetUrl, $requestHeaders = [], $rewriteLocation = false
                 $k === "access-control-allow-headers" ||
                 $k === "access-control-allow-credentials" ||
                 $k === "access-control-max-age" ||
-                $k === "timing-allow-origin"
+                $k === "timing-allow-origin" ||
+                // remove unnecessary
+                $k === "connection" ||
+                $k === "content-encoding" ||
+                $k === "transfer-encoding"
+                || array_key_exists($k, $responseHeadersMap)
             ) {
                 // do nothing
             } else {
@@ -232,6 +264,10 @@ function reverseProxy($targetUrl, $requestHeaders = [], $rewriteLocation = false
         http_response_code(curl_getinfo($curl, CURLINFO_HTTP_CODE)); // forward status code
         return strlen($header_line); // curl need this return
     });
+
+    foreach ($responseHeadersMap as $name => $val) {
+        header("$name: $val");
+    }
 
     // Do not follow location
     curl_setopt($ch, CURLOPT_FOLLOWLOCATION, false);
@@ -256,12 +292,16 @@ function reverseProxy($targetUrl, $requestHeaders = [], $rewriteLocation = false
         header("content-type: application/json");
         $errno = curl_errno($ch);
         $error = curl_error($ch);
-        $json = json_encode(["errno" => $errno, "error" => $error]);
-        if ($_SERVER["REQUEST_METHOD"] === "HEAD")
+        $json = json_encode(["status" => 599, "statusText" => "Failed to fetch", "errno" => $errno, "error" => $error]);
+        if ($_SERVER["REQUEST_METHOD"] === "HEAD") {
             header("x-proxy-error: $json"); // experimental
-        else
+        } else {
+            header("x-proxy-error: $error");
             echo $json;
+        }
     }
+
+    curl_close($ch);
     exit();
 }
 
